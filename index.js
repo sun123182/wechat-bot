@@ -243,7 +243,7 @@ app.post('/callback', async (req, res) => {
     const decryptedJsonStr = decryptMsg(encryptedMsg, WECOM_ENCODING_AES_KEY);
     console.log('解密后的消息字符串:', decryptedJsonStr);
     let 消息;
-    尝试 {
+    try {
       message = JSON.parse(decryptedJsonStr);
       console.log('解析后的消息:', JSON.stringify(message, null, 2));
     } catch (jsonError) {
@@ -260,7 +260,7 @@ app.post('/callback', async (req, res) => {
       return res.JSON({ code: -1, msg: '未知消息格式' });
     }
     if (content) {
-      尝试 {
+      try {
         const gameData = parseGameMessage(内容, 发送者);
         console.日志('解析的游戏数据:', 游戏数据);
         const sheetResult = await writeToNewSheet(游戏数据);
@@ -276,7 +276,7 @@ app.post('/callback', async (req, res) => {
             }
           }]
         };
-        尝试 {
+        try {
           await axios.帖子(SHEET_WEBHOOK_URL, errorPayload, {
             headers: { 'Content-Type': 'application/json' },
             timeout: 5000
@@ -304,7 +304,7 @@ app.get('/', (请求, res) => {
 
    app.帖子('/test', async (请求, res) => {
      const { message = '@财务账号张三 等级50 开始1000 结束2000', sender = '测试用户', testType = 'normal' } = req.body;
-     尝试 {
+     try {
        let testMessage = message;
        if (testType === '升级') testMessage = '@财务账号mao 等级180 开始10000 结束升级10000';
        const gameData = parseGameMessage(测试消息, 发送者);
