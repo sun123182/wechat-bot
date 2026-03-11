@@ -209,25 +209,22 @@ function parseGameMessage(message, sender) {
 async function writeToNewSheet(gameData) {
   if (!SHEET_WEBHOOK_URL) throw new Error('未配置SHEET_WEBHOOK_URL');
   
+  // 测试1：只发送文本和数字字段（不发送单选字段）
   const payload = {
     add_records: [{
       values: {
-        "fOlhsH": gameData.date,
-        "fPRPMM": [{ "text": gameData.weekday }],
-        "fPaTu6": gameData.wechatName,
-        "fYjV7x": gameData.roleName,
-        "fZ3sSb": gameData.level,
-        "fayciJ": gameData.expStart,
-        "fe513b": gameData.expEnd.includes('升级') ? 0 : gameData.expEnd,
-        "fj4ODK": gameData.diff,
-        "fjpgjh": gameData.salary,
-        "fssaCv": gameData.note || '',
-        "fvdx3A": [{ "text": gameData.photoTime }]
+        "fPaTu6": gameData.wechatName,    // 文本
+        "fYjV7x": gameData.roleName,      // 文本
+        "fZ3sSb": gameData.level,         // 数字
+        "fayciJ": gameData.expStart,      // 数字
+        "fe513b": gameData.expEnd.includes('升级') ? "升级" : gameData.expEnd,  // 文本
+        "fj4ODK": gameData.diff,          // 数字
+        "fjpgjh": gameData.salary         // 数字
       }
     }]
   };
   
-  console.log('发送到新表格:', JSON.stringify(payload, null, 2));
+  console.log('发送到新表格（测试1）:', JSON.stringify(payload, null, 2));
   
   try {
     const response = await axios.post(SHEET_WEBHOOK_URL, payload, {
@@ -238,7 +235,30 @@ async function writeToNewSheet(gameData) {
     return response.data;
   } catch (error) {
     console.error('表格写入失败:', error.response?.data || error.message);
-    throw error;
+    
+    // 如果失败，尝试更简化的版本
+    console.log('尝试更简化的版本...');
+    
+    const simplePayload = {
+      add_records: [{
+        values: {
+          "fPaTu6": gameData.wechatName,    // 文本
+          "fYjV7x": gameData.roleName,      // 文本
+          "fZ3sSb": gameData.level,         // 数字
+          "fayciJ": gameData.expStart       // 数字
+        }
+      }]
+    };
+    
+    console.log('发送到新表格（更简化）:', JSON.stringify(simplePayload, null, 2));
+    
+    const simpleResponse = await axios.post(SHEET_WEBHOOK_URL, simplePayload, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 10000
+    });
+    
+    console.log('简化版本写入成功:', simpleResponse.data);
+    return simpleResponse.data;
   }
 }
 
