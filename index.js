@@ -3,16 +3,16 @@ const axios = require('axios');
 const crypto = require('crypto');
 
 const app = express();
-app.use(express.json({ type: '*/*' })); // 接受任何Content-Type
+app.use(express.json({ type: '*/*' }));
 
 // 配置
 const SHEET_WEBHOOK_URL = process.env.SHEET_WEBHOOK_URL;
 const WECOM_TOKEN = process.env.WECOM_TOKEN || 'IQCLf5VMl31IenTIoPk6953';
 const WECOM_ENCODING_AES_KEY = process.env.WECOM_ENCODING_AES_KEY || 'x62C4zUbz8kGWunRHkN8m3t9nyDkzO8zELS3AtcWQ7f';
 
-// ========== 企业微信回调验证（正确版） ==========
+// ========== 企业微信回调验证 ==========
 
-// 验证URL - 企业微信要求的完整验证
+// 验证URL
 app.get('/callback', (req, res) => {
   const { msg_signature, timestamp, nonce, echostr } = req.query;
   
@@ -45,7 +45,7 @@ app.get('/callback', (req, res) => {
     const decryptedMsg = decryptMsg(echostr, WECOM_ENCODING_AES_KEY);
     console.log('✅ 解密成功:', decryptedMsg);
     
-    // 3. 返回明文消息（不加引号、不带BOM、不带换行）
+    // 3. 返回明文消息
     res.set('Content-Type', 'text/plain; charset=utf-8');
     res.send(decryptedMsg);
     
@@ -55,7 +55,7 @@ app.get('/callback', (req, res) => {
   }
 });
 
-// 接收消息
+// 接收消息 - 智能机器人发送JSON格式
 app.post('/callback', async (req, res) => {
   try {
     const { msg_signature, timestamp, nonce } = req.query;
@@ -64,11 +64,10 @@ app.post('/callback', async (req, res) => {
       msg_signature: msg_signature?.substring(0, 20) + '...',
       timestamp, 
       nonce,
-      body_type: typeof req.body,
       body_size: JSON.stringify(req.body).length
     });
     
-    // 企业微信发送的是JSON，encrypt字段包含加密消息
+    // 企业微信智能机器人发送的是JSON，encrypt字段包含加密消息
     let encryptedMsg;
     
     if (req.body.encrypt) {
@@ -88,58 +87,64 @@ app.post('/callback', async (req, res) => {
     }
     
     // 解密消息
-    const decryptedXml = decryptMsg(encryptedMsg, WECOM_ENCODING_AES_KEY);
-    console.log('解密后的XML:', decryptedXml);
+    const decryptedJsonStr = decryptMsg(encryptedMsg, WECOM_ENCODING_AES_KEY);
+    console.log('解密后的JSON字符串:', decryptedJsonStr);
     
-    // 解析XML（简化版）
-    const message = parseWeComXML(decryptedXml);
-    console.log('解析后的消息:', message);
-    
-    // 写入表格
-    if (message.MsgType === 'text' && message.Content) {
-      const sheetResult = await writeToSheet(message.FromUserName, message.Content);
-      console.log('表格写入结果:', sheetResult);
+    // 解析JSON消息（智能机器人发送JSON，不是XML）
+    let message;
+    try {
+      message = JSON.parse(decryptedJsonStr);
+      console.log('解析后的消息:', JSON.stringify(message, null, 2));
+    } catch (jsonError) {
+      console.error('JSON解析失败:', jsonError.message);
+      return res.json({ code: -1, msg: 'JSON解析失败' });
     }
     
-    // 构造响应（企业微信要求加密响应）
-    const responseXml = `<xml>
-      <ToUserName><![CDATA[${message.FromUserName}]]></ToUserName>
-      <FromUserName><![CDATA[${message.ToUserName}]]></FromUserName>
-      <CreateTime>${Math.floor(Date.now() / 1000)}</CreateTime>
-      <MsgType><![CDATA[text]]></MsgType>
-      <Content><![CDATA[消息已记录到表格]]></Content>
-    </xml>`;
+    // 提取消息内容
+    let content = '';
+    let sender = '';
     
-    // 加密响应
-    const encryptedResponse = encryptMsg(responseXml, WECOM_ENCODING_AES_KEY);
-    const responseSignature = getSignature(WECOM_TOKEN, timestamp, nonce, encryptedResponse);
+    if (message.text && message.text.content) {
+      // JSON格式：智能机器人
+      content = message.text.content;
+      sender = message.from?.userid || '未知用户';
+      console.log('提取内容:', { sender, content });
+    } else {
+      console.error('未知消息格式:', message);
+      return res.json({ code: -1, msg: '未知消息格式' });
+    }
     
-    const finalResponse = {
-      encrypt: encryptedResponse,
-      msgsignature: responseSignature,
-      timestamp: parseInt(timestamp),
-      nonce: nonce
+    // 写入表格
+    if (content) {
+      // 清理内容（移除@机器人的部分）
+      const cleanContent = content.replace(/@[^\s]+\s*/g, '').trim();
+      
+      if (cleanContent) {
+        console.log('清理后内容:', cleanContent);
+        const sheetResult = await writeToSheet(sender, cleanContent);
+        console.log('表格写入结果:', sheetResult);
+      } else {
+        console.log('内容为空，跳过写入');
+      }
+    }
+    
+    // 智能机器人响应：返回成功
+    const response = {
+      code: 0,
+      msg: '消息已处理'
     };
     
-    res.json(finalResponse);
+    res.json(response);
     
   } catch (error) {
     console.error('处理消息失败:', error);
     
-    // 即使出错，也要返回企业微信期望的格式
-    try {
-      const errorResponse = encryptMsg('<xml><MsgType>text</MsgType><Content>处理失败</Content></xml>', WECOM_ENCODING_AES_KEY);
-      const responseSignature = getSignature(WECOM_TOKEN, req.query.timestamp, req.query.nonce, errorResponse);
-      
-      res.json({
-        encrypt: errorResponse,
-        msgsignature: responseSignature,
-        timestamp: parseInt(req.query.timestamp || Date.now() / 1000),
-        nonce: req.query.nonce || 'error'
-      });
-    } catch (encryptError) {
-      res.status(500).json({ code: -1, msg: '处理失败', error: error.message });
-    }
+    // 返回错误响应
+    res.json({
+      code: -1,
+      msg: '处理失败',
+      error: error.message
+    });
   }
 });
 
@@ -167,9 +172,8 @@ function decryptMsg(encrypted, encodingAESKey) {
   const iv = key.slice(0, 16);
   const encryptedBuffer = Buffer.from(encrypted, 'base64');
   
-  // 创建解密器
+  // 创建解密器 - 使用PKCS7 padding
   const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
-  decipher.setAutoPadding(false); // 企业微信使用自定义padding
   
   let decrypted = decipher.update(encryptedBuffer);
   decrypted = Buffer.concat([decrypted, decipher.final()]);
@@ -183,56 +187,7 @@ function decryptMsg(encrypted, encodingAESKey) {
   // 提取消息内容
   const msg = decrypted.slice(4, 4 + msgLength).toString('utf8');
   
-  // 后面是企业ID，智能机器人场景为空
   return msg;
-}
-
-// 加密消息
-function encryptMsg(msg, encodingAESKey) {
-  if (!encodingAESKey || encodingAESKey.length !== 43) {
-    throw new Error('EncodingAESKey必须是43位');
-  }
-  
-  const key = Buffer.from(encodingAESKey + '=', 'base64');
-  const iv = key.slice(0, 16);
-  
-  // 生成16字节随机字符串
-  const randomBytes = crypto.randomBytes(16);
-  
-  // 消息长度（4字节）
-  const msgBuffer = Buffer.from(msg, 'utf8');
-  const msgLength = Buffer.alloc(4);
-  msgLength.writeUInt32BE(msgBuffer.length, 0);
-  
-  // 企业ID（智能机器人场景为空）
-  const corpId = Buffer.from('', 'utf8');
-  
-  // 拼接：随机字符串 + 消息长度 + 消息 + 企业ID
-  const toEncrypt = Buffer.concat([randomBytes, msgLength, msgBuffer, corpId]);
-  
-  // 创建加密器
-  const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
-  cipher.setAutoPadding(false);
-  
-  let encrypted = cipher.update(toEncrypt);
-  encrypted = Buffer.concat([encrypted, cipher.final()]);
-  
-  return encrypted.toString('base64');
-}
-
-// 解析XML消息（简化版）
-function parseWeComXML(xml) {
-  const fromMatch = xml.match(/<FromUserName><!\[CDATA\[(.*?)\]\]><\/FromUserName>/);
-  const toMatch = xml.match(/<ToUserName><!\[CDATA\[(.*?)\]\]><\/ToUserName>/);
-  const contentMatch = xml.match(/<Content><!\[CDATA\[(.*?)\]\]><\/Content>/);
-  const msgTypeMatch = xml.match(/<MsgType><!\[CDATA\[(.*?)\]\]><\/MsgType>/);
-  
-  return {
-    FromUserName: fromMatch ? fromMatch[1] : '',
-    ToUserName: toMatch ? toMatch[1] : '',
-    Content: contentMatch ? contentMatch[1] : '',
-    MsgType: msgTypeMatch ? msgTypeMatch[1] : ''
-  };
 }
 
 // ========== 其他接口 ==========
@@ -322,4 +277,5 @@ app.listen(PORT, () => {
   console.log(`🔑 Token: ${WECOM_TOKEN} (${WECOM_TOKEN?.length || 0}位)`);
   console.log(`🔐 AESKey: ${WECOM_ENCODING_AES_KEY ? '已配置(' + WECOM_ENCODING_AES_KEY.length + '位)' : '未配置'}`);
   console.log(`📊 表格Webhook: ${SHEET_WEBHOOK_URL ? '已配置' : '未配置'}`);
+  console.log(`📝 消息格式: 智能机器人JSON格式`);
 });
