@@ -69,7 +69,6 @@ function parseGameMessage(message, sender) {
   console.log('账号匹配:', accountMatch);
   console.log('等级匹配:', levelMatch);
   
-  // 调试：查看所有可能的匹配
   const startPatterns = [/开始\s*(\d+)/, /经验开始\s*(\d+)/, /开始经验\s*(\d+)/];
   const endPatterns = [/结束\s*(\d+)/, /经验结束\s*(\d+)/, /结束经验\s*(\d+)/];
   
@@ -94,7 +93,6 @@ function parseGameMessage(message, sender) {
     }
   }
   
-  // 如果没匹配到数字，尝试匹配升级格式
   if (!expEndMatch) {
     const upgradePatterns = [/结束\s*(升级\+?\d+)/, /经验结束\s*(升级\+?\d+)/, /结束经验\s*(升级\+?\d+)/];
     for (const pattern of upgradePatterns) {
@@ -173,6 +171,7 @@ function parseGameMessage(message, sender) {
 
 async function writeToNewSheet(gameData) {
   if (!SHEET_WEBHOOK_URL) throw new Error('未配置SHEET_WEBHOOK_URL');
+  
   const payload = {
     add_records: [{
       values: {
@@ -182,7 +181,7 @@ async function writeToNewSheet(gameData) {
         "fYjV7x": gameData.roleName,
         "fZ3sSb": gameData.level,
         "fayciJ": gameData.expStart,
-        "fe513b": gameData.expEnd.toString(),
+        "fe513b": gameData.expEnd.includes('升级') ? 0 : gameData.expEnd,
         "fj4ODK": gameData.diff,
         "fjpgjh": gameData.salary,
         "fssaCv": gameData.note || '',
@@ -190,12 +189,20 @@ async function writeToNewSheet(gameData) {
       }
     }]
   };
+  
   console.log('发送到新表格:', JSON.stringify(payload, null, 2));
-  const response = await axios.post(SHEET_WEBHOOK_URL, payload, {
-    headers: { 'Content-Type': 'application/json' },
-    timeout: 10000
-  });
-  return response.data;
+  
+  try {
+    const response = await axios.post(SHEET_WEBHOOK_URL, payload, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 10000
+    });
+    console.log('表格写入成功:', response.data);
+    return response.data;
+  } catch (error) {
+    console.error('表格写入失败:', error.response?.data || error.message);
+    throw error;
+  }
 }
 
 app.get('/callback', (req, res) => {
@@ -253,17 +260,30 @@ app.post('/callback', async (req, res) => {
       return res.json({ code: -1, msg: '未知消息格式' });
     }
     if (content) {
-      try {
+      尝试 {
         const gameData = parseGameMessage(content, sender);
         console.log('解析的游戏数据:', gameData);
         const sheetResult = await writeToNewSheet(gameData);
         console.log('新表格写入结果:', sheetResult);
       } catch (parseError) {
         console.error('解析游戏数据失败:', parseError.message);
-        await writeToNewSheet({
-          roleName: '解析失败', level: 0, expStart: 0, expEnd: 0,
-          wechatName: sender, originalMessage: content, error: parseError.message
-        });
+        const errorPayload = {
+          add_records: [{
+            values: {
+              "fPaTu6": sender,
+              "fYjV7x": "解析失败",
+              "fssaCv": parseError.message
+            }
+          }]
+        };
+        尝试 {
+          await axios.post(SHEET_WEBHOOK_URL, errorPayload, {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 5000
+          });
+        } catch (sheetError) {
+          console.error('错误信息写入表格失败:', sheetError.message);
+        }
       }
     }
     res.json({ code: 0, msg: '消息已处理' });
@@ -275,41 +295,42 @@ app.post('/callback', async (req, res) => {
 
 app.get('/', (req, res) => {
   res.json({
-    service: '游戏数据记录系统',
+ service: '游戏数据记录系统',
     status: '运行中',
-    timestamp: new Date().toISOString(),
-    config: { callback_url: '/callback', sheet_configured: !!SHEET_WEBHOOK_URL }
+    时间戳: new 日期().toISOString(),
+    配置: { 回调_url: '/callback', 表格已配置: !!表格Webhook_URL }
   });
 });
 
-app.post('/test', async (req, res) => {
+app.帖子('/test', async (请求, res) => {
   const { message = '@财务账号张三 等级50 开始1000 结束2000', sender = '测试用户', testType = 'normal' } = req.body;
-  try {
-        let testMessage = message;
-    if (testType === 'upgrade') testMessage = '@财务账号mao 等级180 开始10000 结束升级10000';
-    const gameData = parseGameMessage(testMessage, sender);
-    const result = await writeToNewSheet(gameData);
-    res.json({ success: true, message: '测试成功', data: { parsed: gameData, sheet_result: result } });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+  尝试 {
+    let testMessage = message;
+    if (testType === '升级') testMessage = '@财务账号mao 等级180 开始10000 结束升级10000';
+    const gameData = parseGameMessage(测试消息, 发送者);
+    const result = await writeToNewSheet(游戏数据);
+    res.JSON({ success: true, message: '测试成功', data: { parsed: gameData, sheet_result: result } });
+  } catch (错误) {
+    res.状态(500).JSON({ success: false, error: error.message });
   }
 });
 
-app.get('/health', (req, res) => {
-  res.json({ 
+app.获取('健康', (请求, res) => {
+  res.JSON({ 
     status: 'ok', 
-    timestamp: new Date().toISOString(),
-    weekday: ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][new Date().getDay()],
-    date: new Date().getDate()
+    时间戳新 ()toISOString()(
+    工作日: ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][新 日期().getDay()],
+    日期newDate()getDate()
   });
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-  console.log(`🚀 游戏数据记录系统启动，端口: ${PORT}`);
-  console.log(`🔗 回调地址: /callback`);
-  console.log(`📊 新表格Webhook: ${SHEET_WEBHOOK_URL ? '已配置' : '未配置'}`);
-  console.log(`🎮 支持格式: @财务账号[角色] 等级[数字] 开始经验[数字] 结束经验[数字或升级+数字]`);
-  console.log(`📈 经验表: 1-200级完整数据`);
-  console.log(`🧮 差值计算: 升级情况 = (升级所需经验 ÷ 10000) - 开始经验 + 结束经验`);
+应用.监听(端口, () => {
+  控制台.日志(` 游戏数据记录系统启动，端口:${端口}`);
+  控制台.log(`回调地址: /callback`);
+  控制台.日志(` 新表格Webhook:${SHEET_WEBHOOK_URL ? '已配置' : '未配置'}`);
+  控制台.日志(` 支持格式: @财务账号[角色] 级别[数字] 开始经验[数字] 结束经验[数字或升级+数字]`);
+  控制台.日志(`📈 经验表: 1-200级完整数据`);
+  控制台.日志(` 差值计算: 升级情况 = (升级所需经验 ÷ 10000) - 开始经验 + 结束经验`);
+  控制台日志`升级格式处理: 表格字段fe513b发送数字0`)
 });
