@@ -103,35 +103,33 @@ function parseGameMessage(message, sender) {
   let cleanMessage = message.replace(/@财务账号/g, '').replace(/@财务/g, '').trim();
   console.log('清理后消息:', cleanMessage);
   
-  // 直接提取各个部分
-  const parts = cleanMessage.split(/\s+/);
-  let roleName = '';
-  let level = 0;
-  let expStart = 0;
-  let expEndStr = '';
+  // 使用正则表达式直接提取所有信息
+  const accountMatch = cleanMessage.match(/账号\s*(\S+)/);
+  const levelMatch = cleanMessage.match(/等级\s*(\d+)/);
+  const expStartMatch = cleanMessage.match(/(?:开始|经验开始|开始经验)\s*(\d+)/);
+  const expEndMatch = cleanMessage.match(/(?:结束|经验结束|结束经验)\s*(\S+)/);
   
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i];
-    
-    if (part.startsWith('等级')) {
-      level = parseInt(part.replace('等级', ''), 10);
-    } else if (part.startsWith('开始') || part.includes('开始')) {
-      // 处理：开始10000, 经验开始10000, 开始经验10000
-      expStart = parseInt(part.replace(/开始|经验开始|开始经验/, ''), 10);
-    } else if (part.startsWith('结束') || part.includes('结束')) {
-      // 处理：结束30880, 经验结束30880, 结束经验30880, 结束升级10000
-      expEndStr = part.replace(/结束|经验结束|结束经验/, '');
-    } else if (!roleName && !/^\d+$/.test(part) && !part.includes('等级') && !part.includes('开始') && !part.includes('结束')) {
-      // 第一个非数字非关键字的单词作为角色名
-      roleName = part.replace('账号', '');
-    }
-  }
+  console.log('账号匹配:', accountMatch);
+  console.log('等级匹配:', levelMatch);
+  console.log('开始经验匹配:', expStartMatch);
+  console.log('结束经验匹配:', expEndMatch);
   
-  console.log('解析结果:', { roleName, level, expStart, expEndStr });
-  
-  if (!roleName || !level || !expStart || !expEndStr) {
+  if (!accountMatch || !levelMatch || !expStartMatch || !expEndMatch) {
+    console.log('匹配失败详情:', {
+      account: !!accountMatch,
+      level: !!levelMatch,
+      start: !!expStartMatch,
+      end: !!expEndMatch
+    });
     throw new Error('消息格式不正确，需要包含：账号[角色名] 等级[数字] 开始经验[数字] 结束经验[数字或升级+数字]');
   }
+  
+  const roleName = accountMatch[1];
+  const level = parseInt(levelMatch[1], 10);
+  const expStart = parseInt(expStartMatch[1], 10);
+  const expEndStr = expEndMatch[1];
+  
+  console.log('解析结果:', { roleName, level, expStart, expEndStr });
   
   let expEnd, diff;
   const upgradeMatch = expEndStr.match(/升级\+?(\d+)/);
