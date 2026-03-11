@@ -3,157 +3,236 @@ const axios = require('axios');
 const crypto = require('crypto');
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ type: '*/*' })); // 接受任何Content-Type
 
 // 配置
 const SHEET_WEBHOOK_URL = process.env.SHEET_WEBHOOK_URL;
 const WECOM_TOKEN = process.env.WECOM_TOKEN || 'IQCLf5VMl31IenTIoPk6953';
 const WECOM_ENCODING_AES_KEY = process.env.WECOM_ENCODING_AES_KEY || 'x62C4zUbz8kGWunRHkN8m3t9nyDkzO8zELS3AtcWQ7f';
 
-// ========== 企业微信回调验证（简化版） ==========
+// ========== 企业微信回调验证（正确版） ==========
 
-// 验证URL - 简化版：直接返回echostr，不验证解密
+// 验证URL - 企业微信要求的完整验证
 app.get('/callback', (req, res) => {
   const { msg_signature, timestamp, nonce, echostr } = req.query;
   
-  console.log('企业微信回调验证（简化）:', { 
-    msg_signature, 
+  console.log('企业微信验证请求:', { 
+    msg_signature: msg_signature?.substring(0, 20) + '...',
     timestamp, 
-    nonce, 
-    hasEchostr: !!echostr 
+    nonce,
+    echostr: echostr?.substring(0, 50) + '...'
   });
   
-  if (echostr) {
-    // 简化：直接返回echostr，让企业微信验证通过
-    console.log('返回echostr（不验证解密）');
-    res.send(echostr);
-  } else {
-    res.json({ 
-      code: 0, 
-      msg: '回调接口就绪',
-      config: {
-        token: WECOM_TOKEN,
-        aes_key_configured: !!WECOM_ENCODING_AES_KEY
-      }
-    });
+  if (!msg_signature || !timestamp || !nonce || !echostr) {
+    console.error('缺少必要参数');
+    return res.status(400).send('缺少必要参数');
+  }
+  
+  try {
+    // 1. 验证签名
+    const signature = getSignature(WECOM_TOKEN, timestamp, nonce, echostr);
+    if (signature !== msg_signature) {
+      console.error('签名验证失败', { 
+        expected: signature, 
+        actual: msg_signature 
+      });
+      return res.status(403).send('签名验证失败');
+    }
+    
+    console.log('✅ 签名验证成功');
+    
+    // 2. 解密echostr
+    const decryptedMsg = decryptMsg(echostr, WECOM_ENCODING_AES_KEY);
+    console.log('✅ 解密成功:', decryptedMsg);
+    
+    // 3. 返回明文消息（不加引号、不带BOM、不带换行）
+    res.set('Content-Type', 'text/plain; charset=utf-8');
+    res.send(decryptedMsg);
+    
+  } catch (error) {
+    console.error('验证失败:', error.message);
+    res.status(500).send('验证失败: ' + error.message);
   }
 });
 
-// 接收消息 - 简化版：假设消息未加密或简单处理
+// 接收消息
 app.post('/callback', async (req, res) => {
   try {
     const { msg_signature, timestamp, nonce } = req.query;
     
-    console.log('收到回调POST:', {
-      msg_signature,
+    console.log('收到消息POST:', {
+      msg_signature: msg_signature?.substring(0, 20) + '...',
       timestamp, 
       nonce,
       body_type: typeof req.body,
-      body_keys: Object.keys(req.body)
+      body_size: JSON.stringify(req.body).length
     });
     
-    // 尝试解析消息
-    let message, sender, content;
+    // 企业微信发送的是JSON，encrypt字段包含加密消息
+    let encryptedMsg;
     
-    // 情况1：XML格式（企业微信标准）
-    if (req.body.xml) {
-      const xml = req.body.xml;
-      message = xml.Content?.[0] || '无内容';
-      sender = xml.FromUserName?.[0] || '未知用户';
-      content = message;
-      console.log('XML格式消息:', { sender, content });
+    if (req.body.encrypt) {
+      encryptedMsg = req.body.encrypt;
+    } else if (req.body.Encrypt) {
+      encryptedMsg = req.body.Encrypt;
+    } else {
+      console.log('未加密的请求体:', JSON.stringify(req.body, null, 2));
+      return res.json({ code: -1, msg: '缺少encrypt字段' });
     }
-    // 情况2：JSON格式
-    else if (req.body.Content) {
-      content = req.body.Content;
-      sender = req.body.FromUserName || '未知用户';
-      console.log('JSON格式消息:', { sender, content });
+    
+    // 验证签名
+    const signature = getSignature(WECOM_TOKEN, timestamp, nonce, encryptedMsg);
+    if (signature !== msg_signature) {
+      console.error('消息签名验证失败');
+      return res.status(403).json({ code: -1, msg: '签名验证失败' });
     }
-    // 情况3：加密消息（Encrypt字段）
-    else if (req.body.Encrypt) {
-      console.log('收到加密消息，尝试简化处理...');
-      
-      // 简化处理：如果解密失败，记录原始数据
-      try {
-        // 尝试解密（简化版）
-        const decrypted = simpleDecrypt(req.body.Encrypt);
-        console.log('简化解密结果:', decrypted.substring(0, 100) + '...');
-        
-        // 尝试提取内容
-        const fromMatch = decrypted.match(/<FromUserName><!\[CDATA\[(.*?)\]\]><\/FromUserName>/);
-        const contentMatch = decrypted.match(/<Content><!\[CDATA\[(.*?)\]\]><\/Content>/);
-        
-        sender = fromMatch ? fromMatch[1] : '加密用户';
-        content = contentMatch ? contentMatch[1] : '加密内容';
-        
-      } catch (decryptError) {
-        console.error('解密失败，使用备用方案:', decryptError.message);
-        sender = '加密用户';
-        content = `[加密消息，解密失败: ${req.body.Encrypt.substring(0, 50)}...]`;
-      }
-    }
-    // 情况4：其他格式
-    else {
-      console.log('未知格式，原始数据:', JSON.stringify(req.body, null, 2));
-      content = JSON.stringify(req.body);
-      sender = '未知格式';
-    }
+    
+    // 解密消息
+    const decryptedXml = decryptMsg(encryptedMsg, WECOM_ENCODING_AES_KEY);
+    console.log('解密后的XML:', decryptedXml);
+    
+    // 解析XML（简化版）
+    const message = parseWeComXML(decryptedXml);
+    console.log('解析后的消息:', message);
     
     // 写入表格
-    if (content && content !== '无内容') {
-      const sheetResult = await writeToSheet(sender, content);
+    if (message.MsgType === 'text' && message.Content) {
+      const sheetResult = await writeToSheet(message.FromUserName, message.Content);
       console.log('表格写入结果:', sheetResult);
     }
     
-    // 返回成功响应（企业微信期望的格式）
-    const response = {
-      code: 0,
-      msg: '消息已处理',
-      timestamp: new Date().toISOString()
+    // 构造响应（企业微信要求加密响应）
+    const responseXml = `<xml>
+      <ToUserName><![CDATA[${message.FromUserName}]]></ToUserName>
+      <FromUserName><![CDATA[${message.ToUserName}]]></FromUserName>
+      <CreateTime>${Math.floor(Date.now() / 1000)}</CreateTime>
+      <MsgType><![CDATA[text]]></MsgType>
+      <Content><![CDATA[消息已记录到表格]]></Content>
+    </xml>`;
+    
+    // 加密响应
+    const encryptedResponse = encryptMsg(responseXml, WECOM_ENCODING_AES_KEY);
+    const responseSignature = getSignature(WECOM_TOKEN, timestamp, nonce, encryptedResponse);
+    
+    const finalResponse = {
+      encrypt: encryptedResponse,
+      msgsignature: responseSignature,
+      timestamp: parseInt(timestamp),
+      nonce: nonce
     };
     
-    res.json(response);
+    res.json(finalResponse);
     
   } catch (error) {
-    console.error('处理回调失败:', error);
-    res.status(500).json({
-      code: -1,
-      msg: '处理失败',
-      error: error.message
-    });
+    console.error('处理消息失败:', error);
+    
+    // 即使出错，也要返回企业微信期望的格式
+    try {
+      const errorResponse = encryptMsg('<xml><MsgType>text</MsgType><Content>处理失败</Content></xml>', WECOM_ENCODING_AES_KEY);
+      const responseSignature = getSignature(WECOM_TOKEN, req.query.timestamp, req.query.nonce, errorResponse);
+      
+      res.json({
+        encrypt: errorResponse,
+        msgsignature: responseSignature,
+        timestamp: parseInt(req.query.timestamp || Date.now() / 1000),
+        nonce: req.query.nonce || 'error'
+      });
+    } catch (encryptError) {
+      res.status(500).json({ code: -1, msg: '处理失败', error: error.message });
+    }
   }
 });
 
-// 简化解密函数（不真正解密，只尝试提取）
-function simpleDecrypt(encrypted) {
-  // 如果AESKey有效且格式正确，尝试解密
-  if (WECOM_ENCODING_AES_KEY && WECOM_ENCODING_AES_KEY.length === 43) {
-    try {
-      // 企业微信AES解密逻辑（简化）
-      const key = Buffer.from(WECOM_ENCODING_AES_KEY + '=', 'base64');
-      const iv = key.slice(0, 16);
-      
-      const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
-      decipher.setAutoPadding(false); // 企业微信使用自定义padding
-      
-      let decrypted = decipher.update(encrypted, 'base64', 'utf8');
-      decrypted += decipher.final('utf8');
-      
-      // 移除padding和随机字符串
-      const pad = decrypted.charCodeAt(decrypted.length - 1);
-      if (pad < 1 || pad > 32) {
-        decrypted = decrypted.slice(0, -pad);
-      }
-      
-      // 移除16字节随机字符串
-      return decrypted.slice(16);
-    } catch (error) {
-      // 解密失败，返回原始数据
-      return `<EncryptedData>${encrypted.substring(0, 50)}...</EncryptedData>`;
-    }
+// ========== 工具函数 ==========
+
+// 生成签名
+function getSignature(token, timestamp, nonce, encryptedMsg) {
+  const str = [token, timestamp, nonce, encryptedMsg].sort().join('');
+  return crypto.createHash('sha1').update(str).digest('hex');
+}
+
+// 解密消息（企业微信标准算法）
+function decryptMsg(encrypted, encodingAESKey) {
+  if (!encodingAESKey || encodingAESKey.length !== 43) {
+    throw new Error('EncodingAESKey必须是43位');
   }
   
-  return `<EncryptedData>${encrypted.substring(0, 50)}...</EncryptedData>`;
+  // 添加'='补全到44位base64
+  const key = Buffer.from(encodingAESKey + '=', 'base64');
+  
+  if (key.length !== 32) {
+    throw new Error('解码后的Key长度必须是32字节');
+  }
+  
+  const iv = key.slice(0, 16);
+  const encryptedBuffer = Buffer.from(encrypted, 'base64');
+  
+  // 创建解密器
+  const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+  decipher.setAutoPadding(false); // 企业微信使用自定义padding
+  
+  let decrypted = decipher.update(encryptedBuffer);
+  decrypted = Buffer.concat([decrypted, decipher.final()]);
+  
+  // 移除头部16字节随机字符串
+  decrypted = decrypted.slice(16);
+  
+  // 获取消息长度（4字节网络字节序）
+  const msgLength = decrypted.readUInt32BE(0);
+  
+  // 提取消息内容
+  const msg = decrypted.slice(4, 4 + msgLength).toString('utf8');
+  
+  // 后面是企业ID，智能机器人场景为空
+  return msg;
+}
+
+// 加密消息
+function encryptMsg(msg, encodingAESKey) {
+  if (!encodingAESKey || encodingAESKey.length !== 43) {
+    throw new Error('EncodingAESKey必须是43位');
+  }
+  
+  const key = Buffer.from(encodingAESKey + '=', 'base64');
+  const iv = key.slice(0, 16);
+  
+  // 生成16字节随机字符串
+  const randomBytes = crypto.randomBytes(16);
+  
+  // 消息长度（4字节）
+  const msgBuffer = Buffer.from(msg, 'utf8');
+  const msgLength = Buffer.alloc(4);
+  msgLength.writeUInt32BE(msgBuffer.length, 0);
+  
+  // 企业ID（智能机器人场景为空）
+  const corpId = Buffer.from('', 'utf8');
+  
+  // 拼接：随机字符串 + 消息长度 + 消息 + 企业ID
+  const toEncrypt = Buffer.concat([randomBytes, msgLength, msgBuffer, corpId]);
+  
+  // 创建加密器
+  const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+  cipher.setAutoPadding(false);
+  
+  let encrypted = cipher.update(toEncrypt);
+  encrypted = Buffer.concat([encrypted, cipher.final()]);
+  
+  return encrypted.toString('base64');
+}
+
+// 解析XML消息（简化版）
+function parseWeComXML(xml) {
+  const fromMatch = xml.match(/<FromUserName><!\[CDATA\[(.*?)\]\]><\/FromUserName>/);
+  const toMatch = xml.match(/<ToUserName><!\[CDATA\[(.*?)\]\]><\/ToUserName>/);
+  const contentMatch = xml.match(/<Content><!\[CDATA\[(.*?)\]\]><\/Content>/);
+  const msgTypeMatch = xml.match(/<MsgType><!\[CDATA\[(.*?)\]\]><\/MsgType>/);
+  
+  return {
+    FromUserName: fromMatch ? fromMatch[1] : '',
+    ToUserName: toMatch ? toMatch[1] : '',
+    Content: contentMatch ? contentMatch[1] : '',
+    MsgType: msgTypeMatch ? msgTypeMatch[1] : ''
+  };
 }
 
 // ========== 其他接口 ==========
@@ -161,18 +240,19 @@ function simpleDecrypt(encrypted) {
 // 首页
 app.get('/', (req, res) => {
   res.json({
-    service: '企业微信回调服务（简化版）',
+    service: '企业微信智能机器人回调服务',
     status: '运行中',
     timestamp: new Date().toISOString(),
-    endpoints: {
-      callback: 'GET/POST /callback',
-      test: 'POST /test',
-      health: 'GET /health'
+    config: {
+      callback_url: '/callback',
+      token_configured: !!WECOM_TOKEN,
+      aeskey_configured: !!WECOM_ENCODING_AES_KEY && WECOM_ENCODING_AES_KEY.length === 43,
+      sheet_configured: !!SHEET_WEBHOOK_URL
     }
   });
 });
 
-// 测试接口
+// 测试表格写入
 app.post('/test', async (req, res) => {
   const { sender = '测试用户', message = '测试消息' } = req.body;
   
@@ -197,14 +277,14 @@ app.get('/health', (req, res) => {
     status: 'ok', 
     timestamp: new Date().toISOString(),
     config: {
-      sheet_configured: !!SHEET_WEBHOOK_URL,
-      token: WECOM_TOKEN,
+      token_length: WECOM_TOKEN?.length || 0,
+      aeskey_length: WECOM_ENCODING_AES_KEY?.length || 0,
       port: process.env.PORT || 10000
     }
   });
 });
 
-// 写入表格函数
+// 写入表格
 async function writeToSheet(sender, message) {
   if (!SHEET_WEBHOOK_URL) {
     throw new Error('未配置SHEET_WEBHOOK_URL');
@@ -237,9 +317,9 @@ async function writeToSheet(sender, message) {
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
-  console.log(`🚀 企业微信回调服务（简化版）启动，端口: ${PORT}`);
+  console.log(`🚀 企业微信智能机器人服务启动，端口: ${PORT}`);
   console.log(`🔗 回调地址: /callback`);
-  console.log(`🔑 Token: ${WECOM_TOKEN}`);
+  console.log(`🔑 Token: ${WECOM_TOKEN} (${WECOM_TOKEN?.length || 0}位)`);
   console.log(`🔐 AESKey: ${WECOM_ENCODING_AES_KEY ? '已配置(' + WECOM_ENCODING_AES_KEY.length + '位)' : '未配置'}`);
   console.log(`📊 表格Webhook: ${SHEET_WEBHOOK_URL ? '已配置' : '未配置'}`);
 });
