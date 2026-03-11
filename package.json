@@ -1,0 +1,23 @@
+{
+  "name": "wecom-to-smartsheet",
+  "version": "1.0.0",
+  "description": "企业微信消息转发到智能表格",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "keywords": ["wecom", "smartsheet", "webhook", "automation"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "axios": "^1.6.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
