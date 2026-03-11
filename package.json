@@ -1,0 +1,16 @@
+{
+  "name": "wechat-bot-server",
+  "version": "1.0.0",
+  "description": "Enterprise WeChat smart robot callback server on Render",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@wecom/crypto": "^1.0.1",
+    "axios": "^1.7.9",
+    "body-parser": "^1.20.3",
+    "express": "^4.21.2",
+    "xml2js": "^0.6.2"
+  }
+}
