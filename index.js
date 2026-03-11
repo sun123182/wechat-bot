@@ -64,19 +64,29 @@ function parseGameMessage(message, sender) {
   console.log('清理后消息:', cleanMessage);
   const accountMatch = cleanMessage.match(/账号\s*(\S+)/);
   const levelMatch = cleanMessage.match(/等级\s*(\d+)/);
-  let expStartMatch = cleanMessage.match(/经验开始\s*(\d+)/);
-  if (!expStartMatch) expStartMatch = cleanMessage.match(/开始\s*(\d+)/);
-  let expEndMatch = cleanMessage.match(/经验结束\s*(\S+)/);
-  if (!expEndMatch) expEndMatch = cleanMessage.match(/结束\s*(\S+)/);
+  
+  // 支持三种字段名：开始/经验开始/开始经验
+  let expStartMatch = cleanMessage.match(/开始\s*(\d+)/);
+  if (!expStartMatch) expStartMatch = cleanMessage.match(/经验开始\s*(\d+)/);
+  if (!expStartMatch) expStartMatch = cleanMessage.match(/开始经验\s*(\d+)/);
+  
+  // 支持三种字段名：结束/经验结束/结束经验
+  let expEndMatch = cleanMessage.match(/结束\s*(\S+)/);
+  if (!expEndMatch) expEndMatch = cleanMessage.match(/经验结束\s*(\S+)/);
+  if (!expEndMatch) expEndMatch = cleanMessage.match(/结束经验\s*(\S+)/);
+  
   if (!accountMatch || !levelMatch || !expStartMatch || !expEndMatch) {
-    throw new Error('消息格式不正确，需要包含：账号[角色名] 等级[数字] 开始[数字] 结束[数字或升级+数字]');
+    throw new Error('消息格式不正确，需要包含：账号[角色名] 等级[数字] 开始经验[数字] 结束经验[数字或升级+数字]');
   }
+  
   const roleName = accountMatch[1];
   const level = parseInt(levelMatch[1], 10);
   const expStart = parseInt(expStartMatch[1], 10);
   const expEndStr = expEndMatch[1];
+  
   let expEnd, diff;
   const upgradeMatch = expEndStr.match(/升级\+?(\d+)/);
+  
   if (upgradeMatch) {
     const extraExp = parseInt(upgradeMatch[1], 10);
     const upgradeExpNeeded = getUpgradeExperience(level);
@@ -90,6 +100,7 @@ function parseGameMessage(message, sender) {
     if (expEnd <= expStart) throw new Error('经验结束值必须大于经验开始值');
     diff = expEnd - expStart;
   }
+  
   let salary;
   if (roleName === 'mao' || roleName === '米露') {
     salary = (diff / 1440) * 10;
@@ -99,10 +110,12 @@ function parseGameMessage(message, sender) {
     salary = (diff / 1200) * 10;
   }
   salary = Math.round(salary * 100) / 100;
+  
   const now = new Date();
   const dateNum = parseInt(now.toISOString().slice(8, 10));
   const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
   const weekday = weekdays[now.getDay()];
+  
   return {
     date: dateNum, weekday: weekday, wechatName: sender, roleName: roleName,
     level: level, expStart: expStart, expEnd: expEnd.toString(), diff: diff,
