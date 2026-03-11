@@ -9,7 +9,6 @@ const SHEET_WEBHOOK_URL = 'https://qyapi.weixin.qq.com/cgi-bin/wedoc/smartsheet/
 const WECOM_TOKEN = process.env.WECOM_TOKEN || 'IQCLf5VMl31IenTIoPk6953';
 const WECOM_ENCODING_AES_KEY = process.env.WECOM_ENCODING_AES_KEY || 'x62C4zUbz8kGWunRHkN8m3t9nyDkzO8zELS3AtcWQ7f';
 
-// 经验表数据（1-200级）
 const EXPERIENCE_TABLE = {
   1:15,2:34,3:57,4:92,5:135,6:192,7:264,8:352,9:456,10:578,11:718,12:876,13:1054,14:1252,15:1470,
   16:1708,17:1968,18:2250,19:2554,20:2880,21:3230,22:3604,23:4002,24:4424,25:4872,26:5346,27:5846,
@@ -33,16 +32,13 @@ const EXPERIENCE_TABLE = {
   193:799488,194:810476,195:821560,196:832742,197:844022,198:855400,199:866876,200:878450
 };
 
-// 工具函数
 function getSignature(token, timestamp, nonce, encryptedMsg) {
   const str = [token, timestamp, nonce, encryptedMsg].sort().join('');
   return crypto.createHash('sha1').update(str).digest('hex');
 }
 
 function decryptMsg(encrypted, encodingAESKey) {
-  if (!encodingAESKey || encodingAESKey.length !== 43) {
-    throw new Error('EncodingAESKey必须是43位');
-  }
+  if (!encodingAESKey || encodingAESKey.length !== 43) throw new Error('EncodingAESKey必须是43位');
   const key = Buffer.from(encodingAESKey + '=', 'base64');
   if (key.length !== 32) throw new Error('解码后的Key长度必须是32字节');
   const iv = key.slice(0, 16);
@@ -65,11 +61,13 @@ function parseGameMessage(message, sender) {
   
   const accountMatch = cleanMessage.match(/账号\s*(\S+)/);
   const levelMatch = cleanMessage.match(/等级\s*(\d+)/);
-  const expStartMatch = cleanMessage.match(/经验开始\s*(\d+)/);
-  const expEndMatch = cleanMessage.match(/经验结束\s*(\S+)/);
+  let expStartMatch = cleanMessage.match(/经验开始\s*(\d+)/);
+  if (!expStartMatch) expStartMatch = cleanMessage.match(/开始\s*(\d+)/);
+  let expEndMatch = cleanMessage.match(/经验结束\s*(\S+)/);
+  if (!expEndMatch) expEndMatch = cleanMessage.match(/结束\s*(\S+)/);
   
   if (!accountMatch || !levelMatch || !expStartMatch || !expEndMatch) {
-    throw new Error('消息格式不正确');
+    throw new Error('消息格式不正确，需要包含：账号[角色名] 等级[数字] 开始[数字] 结束[数字或升级+数字]');
   }
   
   const roleName = accountMatch[1];
@@ -78,7 +76,7 @@ function parseGameMessage(message, sender) {
   const expEndStr = expEndMatch[1];
   
   let expEnd, diff;
-  const upgradeMatch = expEndStr.match(/升级\+(\d+)/);
+  const upgradeMatch = expEndStr.match(/升级\+?(\d+)/);
   
   if (upgradeMatch) {
     const extraExp = parseInt(upgradeMatch[1], 10);
@@ -118,7 +116,6 @@ function parseGameMessage(message, sender) {
 
 async function writeToNewSheet(gameData) {
   if (!SHEET_WEBHOOK_URL) throw new Error('未配置SHEET_WEBHOOK_URL');
-  
   const payload = {
     add_records: [{
       values: {
@@ -136,7 +133,6 @@ async function writeToNewSheet(gameData) {
       }
     }]
   };
-  
   console.log('发送到新表格:', JSON.stringify(payload, null, 2));
   const response = await axios.post(SHEET_WEBHOOK_URL, payload, {
     headers: { 'Content-Type': 'application/json' },
@@ -145,15 +141,10 @@ async function writeToNewSheet(gameData) {
   return response.data;
 }
 
-// 路由
 app.get('/callback', (req, res) => {
   const { msg_signature, timestamp, nonce, echostr } = req.query;
   console.log('企业微信验证请求:', { msg_signature: msg_signature?.substring(0, 20) + '...', timestamp, nonce });
-  
-  if (!msg_signature || !timestamp || !nonce || !echostr) {
-    return res.status(400).send('缺少必要参数');
-  }
-  
+  if (!msg_signature || !timestamp || !nonce || !echostr) return res.status(400).send('缺少必要参数');
   try {
     const signature = getSignature(WECOM_TOKEN, timestamp, nonce, echostr);
     if (signature !== msg_signature) {
@@ -175,22 +166,18 @@ app.post('/callback', async (req, res) => {
   try {
     const { msg_signature, timestamp, nonce } = req.query;
     console.log('收到消息POST:', { msg_signature: msg_signature?.substring(0, 20) + '...', timestamp, nonce });
-    
     let encryptedMsg = req.body.encrypt || req.body.Encrypt;
     if (!encryptedMsg) {
       console.log('未加密的请求体:', JSON.stringify(req.body, null, 2));
       return res.json({ code: -1, msg: '缺少encrypt字段' });
     }
-    
     const signature = getSignature(WECOM_TOKEN, timestamp, nonce, encryptedMsg);
     if (signature !== msg_signature) {
       console.error('消息签名验证失败');
       return res.status(403).json({ code: -1, msg: '签名验证失败' });
     }
-    
     const decryptedJsonStr = decryptMsg(encryptedMsg, WECOM_ENCODING_AES_KEY);
     console.log('解密后的消息字符串:', decryptedJsonStr);
-    
     let message;
     try {
       message = JSON.parse(decryptedJsonStr);
@@ -199,7 +186,6 @@ app.post('/callback', async (req, res) => {
       console.error('JSON解析失败:', jsonError.message);
       return res.json({ code: -1, msg: 'JSON解析失败' });
     }
-    
     let content = '', sender = '';
     if (message.text && message.text.content) {
       content = message.text.content;
@@ -209,7 +195,6 @@ app.post('/callback', async (req, res) => {
       console.error('未知消息格式:', message);
       return res.json({ code: -1, msg: '未知消息格式' });
     }
-    
     if (content) {
       try {
         const gameData = parseGameMessage(content, sender);
@@ -224,7 +209,6 @@ app.post('/callback', async (req, res) => {
         });
       }
     }
-    
     res.json({ code: 0, msg: '消息已处理' });
   } catch (error) {
     console.error('处理消息失败:', error);
@@ -242,10 +226,10 @@ app.get('/', (req, res) => {
 });
 
 app.post('/test', async (req, res) => {
-  const { message = '@财务账号张三 等级50 经验开始1000 经验结束2000', sender = '测试用户', testType = 'normal' } = req.body;
+  const { message = '@财务账号张三 等级50 开始1000 结束2000', sender = '测试用户', testType = 'normal' } = req.body;
   try {
     let testMessage = message;
-    if (testType === 'upgrade') testMessage = '@财务账号张三 等级50 经验开始1000 经验结束升级+100';
+    if (testType === 'upgrade') testMessage = '@财务账号张三 等级50 开始1000 结束升级10000';
     const gameData = parseGameMessage(testMessage, sender);
     const result = await writeToNewSheet(gameData);
     res.json({ success: true, message: '测试成功', data: { parsed: gameData, sheet_result: result } });
@@ -268,5 +252,5 @@ app.listen(PORT, () => {
   console.log(`🚀 游戏数据记录系统启动，端口: ${PORT}`);
   console.log(`🔗 回调地址: /callback`);
   console.log(`📊 新表格Webhook: ${SHEET_WEBHOOK_URL ? '已配置' : '未配置'}`);
-  console.log(`🎮 支持格式: @财务账号[角色] 等级[数字] 经验开始[数字] 经验结束[数字或升级+数字]`);
+  console.log(`🎮 支持格式: @财务账号[角色] 等级[数字] 开始[数字] 结束[数字或升级+数字]`);
 });
