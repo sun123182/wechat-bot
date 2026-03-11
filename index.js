@@ -192,7 +192,7 @@ async function writeToNewSheet(gameData) {
   
   console.log('发送到新表格:', JSON.stringify(payload, null, 2));
   
-  尝试 {
+  try {
     const response = await axios.post(SHEET_WEBHOOK_URL, payload, {
       headers: { 'Content-Type': 'application/json' },
       timeout: 10000
