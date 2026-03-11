@@ -97,67 +97,41 @@ function getUpgradeExperience(level) {
 }
 
 function parseGameMessage(message, sender) {
+  console.log('原始消息:', message);
+  
+  // 清理消息
   let cleanMessage = message.replace(/@财务账号/g, '').replace(/@财务/g, '').trim();
   console.log('清理后消息:', cleanMessage);
   
-  const accountMatch = cleanMessage.match(/账号\s*(\S+)/);
-  const levelMatch = cleanMessage.match(/等级\s*(\d+)/);
+  // 直接提取各个部分
+  const parts = cleanMessage.split(/\s+/);
+  let roleName = '';
+  let level = 0;
+  let expStart = 0;
+  let expEndStr = '';
   
-  console.log('账号匹配:', accountMatch);
-  console.log('等级匹配:', levelMatch);
-  
-  const startPatterns = [/开始\s*(\d+)/, /经验开始\s*(\d+)/, /开始经验\s*(\d+)/];
-  const endPatterns = [/结束\s*(\d+)/, /经验结束\s*(\d+)/, /结束经验\s*(\d+)/];
-  
-  let expStartMatch = null;
-  let expEndMatch = null;
-  
-  for (const pattern of startPatterns) {
-    const match = cleanMessage.match(pattern);
-    if (match) {
-      expStartMatch = match;
-      console.log('开始经验匹配:', pattern, '->', match);
-      break;
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    
+    if (part.startsWith('等级')) {
+      level = parseInt(part.replace('等级', ''), 10);
+    } else if (part.startsWith('开始') || part.includes('开始')) {
+      // 处理：开始10000, 经验开始10000, 开始经验10000
+      expStart = parseInt(part.replace(/开始|经验开始|开始经验/, ''), 10);
+    } else if (part.startsWith('结束') || part.includes('结束')) {
+      // 处理：结束30880, 经验结束30880, 结束经验30880, 结束升级10000
+      expEndStr = part.replace(/结束|经验结束|结束经验/, '');
+    } else if (!roleName && !/^\d+$/.test(part) && !part.includes('等级') && !part.includes('开始') && !part.includes('结束')) {
+      // 第一个非数字非关键字的单词作为角色名
+      roleName = part.replace('账号', '');
     }
   }
-  
-  for (const pattern of endPatterns) {
-    const match = cleanMessage.match(pattern);
-    if (match) {
-      expEndMatch = match;
-      console.log('结束经验匹配:', pattern, '->', match);
-      break;
-    }
-  }
-  
-  if (!expEndMatch) {
-    const upgradePatterns = [/结束\s*(升级\+?\d+)/, /经验结束\s*(升级\+?\d+)/, /结束经验\s*(升级\+?\d+)/];
-    for (const pattern of upgradePatterns) {
-      const match = cleanMessage.match(pattern);
-      if (match) {
-        expEndMatch = match;
-        console.log('升级格式匹配:', pattern, '->', match);
-        break;
-      }
-    }
-  }
-  
-  if (!accountMatch || !levelMatch || !expStartMatch || !expEndMatch) {
-    console.log('匹配失败详情:', {
-      account: !!accountMatch,
-      level: !!levelMatch,
-      start: !!expStartMatch,
-      end: !!expEndMatch
-    });
-    throw new Error('消息格式不正确，需要包含：账号[角色名] 等级[数字] 开始经验[数字] 结束经验[数字或升级+数字]');
-  }
-  
-  const roleName = accountMatch[1];
-  const level = parseInt(levelMatch[1], 10);
-  const expStart = parseInt(expStartMatch[1], 10);
-  const expEndStr = expEndMatch[1];
   
   console.log('解析结果:', { roleName, level, expStart, expEndStr });
+  
+  if (!roleName || !level || !expStart || !expEndStr) {
+    throw new Error('消息格式不正确，需要包含：账号[角色名] 等级[数字] 开始经验[数字] 结束经验[数字或升级+数字]');
+  }
   
   let expEnd, diff;
   const upgradeMatch = expEndStr.match(/升级\+?(\d+)/);
@@ -209,22 +183,26 @@ function parseGameMessage(message, sender) {
 async function writeToNewSheet(gameData) {
   if (!SHEET_WEBHOOK_URL) throw new Error('未配置SHEET_WEBHOOK_URL');
   
-  // 测试1：只发送文本和数字字段（不发送单选字段）
+  // 根据示例构建正确的payload
   const payload = {
     add_records: [{
       values: {
-        "fPaTu6": gameData.wechatName,    // 文本
-        "fYjV7x": gameData.roleName,      // 文本
-        "fZ3sSb": gameData.level,         // 数字
-        "fayciJ": gameData.expStart,      // 数字
-        "fe513b": gameData.expEnd.includes('升级') ? "升级" : gameData.expEnd,  // 文本
-        "fj4ODK": gameData.diff,          // 数字
-        "fjpgjh": gameData.salary         // 数字
+        "fOlhsH": gameData.date,                    // 日期 - 数字
+        "fPRPMM": [{ "text": gameData.weekday }],   // 星期 - 单选
+        "fPaTu6": gameData.wechatName,              // 微信名称 - 文本
+        "fYjV7x": gameData.roleName,                // 角色名称 - 文本
+        "fZ3sSb": gameData.level,                   // 等级 - 数字
+        "fayciJ": gameData.expStart,                // 经验值（开始）- 数字
+        "fe513b": gameData.expEnd,                  // 经验值（结束）- 文本（重要！）
+        "fj4ODK": gameData.diff,                    // 差值 - 数字
+        "fjpgjh": gameData.salary,                  // 工资 - 数字
+        "fssaCv": gameData.note || "",              // 备注 - 文本
+        "fvdx3A": [{ "text": gameData.photoTime }]  // 拍照时间 - 单选
       }
     }]
   };
   
-  console.log('发送到新表格（测试1）:', JSON.stringify(payload, null, 2));
+  console.log('发送到新表格:', JSON.stringify(payload, null, 2));
   
   try {
     const response = await axios.post(SHEET_WEBHOOK_URL, payload, {
@@ -235,30 +213,7 @@ async function writeToNewSheet(gameData) {
     return response.data;
   } catch (error) {
     console.error('表格写入失败:', error.response?.data || error.message);
-    
-    // 如果失败，尝试更简化的版本
-    console.log('尝试更简化的版本...');
-    
-    const simplePayload = {
-      add_records: [{
-        values: {
-          "fPaTu6": gameData.wechatName,    // 文本
-          "fYjV7x": gameData.roleName,      // 文本
-          "fZ3sSb": gameData.level,         // 数字
-          "fayciJ": gameData.expStart       // 数字
-        }
-      }]
-    };
-    
-    console.log('发送到新表格（更简化）:', JSON.stringify(simplePayload, null, 2));
-    
-    const simpleResponse = await axios.post(SHEET_WEBHOOK_URL, simplePayload, {
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 10000
-    });
-    
-    console.log('简化版本写入成功:', simpleResponse.data);
-    return simpleResponse.data;
+    throw error;
   }
 }
 
@@ -331,15 +286,14 @@ app.post('/callback', async (req, res) => {
       console.log('原始消息:', { sender, content });
     } else {
       console.error('未知消息格式:', message);
-      return res.json({ code: -1,
-                             msg: '未知消息格式' });
+      return res.json({ code: -1, msg: '未知消息格式' });
     }
     if (content) {
       try {
         const gameData = parseGameMessage(content, sender);
         console.log('解析的游戏数据:', gameData);
         const sheetResult = await writeToNewSheet(gameData);
-        console.log('新表格写入结果:', sheetResult);
+       console.log('新表格写入结果:', sheetResult);
       } catch (parseError) {
         console.error('解析游戏数据失败:', parseError.message);
         const errorPayload = {
@@ -407,5 +361,5 @@ app.listen(PORT, () => {
   console.log(`🎮 支持格式: @财务账号[角色] 等级[数字] 开始经验[数字] 结束经验[数字或升级+数字]`);
   console.log(`📈 经验表: 1-200级完整数据`);
   console.log(`🧮 差值计算: 升级情况 = (升级所需经验 ÷ 10000) - 开始经验 + 结束经验`);
-  console.log(`🔄 升级格式处理: 表格字段fe513b发送数字0`);
+  console.log(`🔄 升级格式处理: 表格字段fe513b发送文本值`);
 });
