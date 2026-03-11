@@ -62,69 +62,21 @@ function getUpgradeExperience(level) {
 function parseGameMessage(message, sender) {
   let cleanMessage = message.replace(/@财务账号/g, '').replace(/@财务/g, '').trim();
   console.log('清理后消息:', cleanMessage);
-  
   const accountMatch = cleanMessage.match(/账号\s*(\S+)/);
   const levelMatch = cleanMessage.match(/等级\s*(\d+)/);
-  
-  console.log('账号匹配:', accountMatch);
-  console.log('等级匹配:', levelMatch);
-  
-  const startPatterns = [/开始\s*(\d+)/, /经验开始\s*(\d+)/, /开始经验\s*(\d+)/];
-  const endPatterns = [/结束\s*(\d+)/, /经验结束\s*(\d+)/, /结束经验\s*(\d+)/];
-  
-  let expStartMatch = null;
-  let expEndMatch = null;
-  
-  for (const pattern of startPatterns) {
-    const match = cleanMessage.match(pattern);
-    if (match) {
-      expStartMatch = match;
-      console.log('开始经验匹配:', pattern, '->', match);
-      break;
-    }
-  }
-  
-  for (const pattern of endPatterns) {
-    const match = cleanMessage.match(pattern);
-    if (match) {
-      expEndMatch = match;
-      console.log('结束经验匹配:', pattern, '->', match);
-      break;
-    }
-  }
-  
-  if (!expEndMatch) {
-    const upgradePatterns = [/结束\s*(升级\+?\d+)/, /经验结束\s*(升级\+?\d+)/, /结束经验\s*(升级\+?\d+)/];
-    for (const pattern of upgradePatterns) {
-      const match = cleanMessage.match(pattern);
-      if (match) {
-        expEndMatch = match;
-        console.log('升级格式匹配:', pattern, '->', match);
-        break;
-      }
-    }
-  }
-  
+  let expStartMatch = cleanMessage.match(/经验开始\s*(\d+)/);
+  if (!expStartMatch) expStartMatch = cleanMessage.match(/开始\s*(\d+)/);
+  let expEndMatch = cleanMessage.match(/经验结束\s*(\S+)/);
+  if (!expEndMatch) expEndMatch = cleanMessage.match(/结束\s*(\S+)/);
   if (!accountMatch || !levelMatch || !expStartMatch || !expEndMatch) {
-    console.log('匹配失败详情:', {
-      account: !!accountMatch,
-      level: !!levelMatch,
-      start: !!expStartMatch,
-      end: !!expEndMatch
-    });
-    throw new Error('消息格式不正确，需要包含：账号[角色名] 等级[数字] 开始经验[数字] 结束经验[数字或升级+数字]');
+    throw new Error('消息格式不正确，需要包含：账号[角色名] 等级[数字] 开始[数字] 结束[数字或升级+数字]');
   }
-  
   const roleName = accountMatch[1];
   const level = parseInt(levelMatch[1], 10);
   const expStart = parseInt(expStartMatch[1], 10);
   const expEndStr = expEndMatch[1];
-  
-  console.log('解析结果:', { roleName, level, expStart, expEndStr });
-  
   let expEnd, diff;
   const upgradeMatch = expEndStr.match(/升级\+?(\d+)/);
-  
   if (upgradeMatch) {
     const extraExp = parseInt(upgradeMatch[1], 10);
     const upgradeExpNeeded = getUpgradeExperience(level);
@@ -134,19 +86,10 @@ function parseGameMessage(message, sender) {
     console.log(`升级计算: 等级${level}升级需${upgradeExpNeeded}, 开始${expStart}, 结束${extraExp}, 差值=${diff}`);
   } else {
     expEnd = parseInt(expEndStr, 10);
-    console.log('尝试解析结束经验为数字:', expEndStr, '->', expEnd);
-    
-    if (isNaN(expEnd)) {
-      throw new Error('经验结束值必须是数字或"升级+数字"格式，实际值: ' + expEndStr);
-    }
-    
-    if (expEnd <= expStart) {
-      throw new Error('经验结束值必须大于经验开始值');
-    }
-    
+    if (isNaN(expEnd)) throw new Error('经验结束值必须是数字或"升级+数字"格式');
+    if (expEnd <= expStart) throw new Error('经验结束值必须大于经验开始值');
     diff = expEnd - expStart;
   }
-  
   let salary;
   if (roleName === 'mao' || roleName === '米露') {
     salary = (diff / 1440) * 10;
@@ -156,12 +99,10 @@ function parseGameMessage(message, sender) {
     salary = (diff / 1200) * 10;
   }
   salary = Math.round(salary * 100) / 100;
-  
   const now = new Date();
   const dateNum = parseInt(now.toISOString().slice(8, 10));
   const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
   const weekday = weekdays[now.getDay()];
-  
   return {
     date: dateNum, weekday: weekday, wechatName: sender, roleName: roleName,
     level: level, expStart: expStart, expEnd: expEnd.toString(), diff: diff,
@@ -171,7 +112,6 @@ function parseGameMessage(message, sender) {
 
 async function writeToNewSheet(gameData) {
   if (!SHEET_WEBHOOK_URL) throw new Error('未配置SHEET_WEBHOOK_URL');
-  
   const payload = {
     add_records: [{
       values: {
@@ -181,7 +121,7 @@ async function writeToNewSheet(gameData) {
         "fYjV7x": gameData.roleName,
         "fZ3sSb": gameData.level,
         "fayciJ": gameData.expStart,
-        "fe513b": gameData.expEnd.includes('升级') ? 0 : gameData.expEnd,
+        "fe513b": gameData.expEnd.toString(),
         "fj4ODK": gameData.diff,
         "fjpgjh": gameData.salary,
         "fssaCv": gameData.note || '',
@@ -189,20 +129,12 @@ async function writeToNewSheet(gameData) {
       }
     }]
   };
-  
   console.log('发送到新表格:', JSON.stringify(payload, null, 2));
-  
-  try {
-    const response = await axios.post(SHEET_WEBHOOK_URL, payload, {
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 10000
-    });
-    console.log('表格写入成功:', response.data);
-    return response.data;
-  } catch (error) {
-    console.error('表格写入失败:', error.response?.data || error.message);
-    throw error;
-  }
+  const response = await axios.post(SHEET_WEBHOOK_URL, payload, {
+    headers: { 'Content-Type': 'application/json' },
+    timeout: 10000
+  });
+  return response.data;
 }
 
 app.get('/callback', (req, res) => {
@@ -242,7 +174,7 @@ app.post('/callback', async (req, res) => {
     }
     const decryptedJsonStr = decryptMsg(encryptedMsg, WECOM_ENCODING_AES_KEY);
     console.log('解密后的消息字符串:', decryptedJsonStr);
-    let 消息;
+    let message;
     try {
       message = JSON.parse(decryptedJsonStr);
       console.log('解析后的消息:', JSON.stringify(message, null, 2));
@@ -251,87 +183,72 @@ app.post('/callback', async (req, res) => {
       return res.json({ code: -1, msg: 'JSON解析失败' });
     }
     let content = '', sender = '';
-    如果 (消息.文本 && 消息.文本.内容) {
-      内容 = 消息.文本.内容;
+    if (message.text && message.text.content) {
+      content = message.text.content;
       sender = message.from?.userid || '未知用户';
       console.log('原始消息:', { sender, content });
     } else {
       console.error('未知消息格式:', message);
-      return res.JSON({ code: -1, msg: '未知消息格式' });
+      return res.json({ code: -1, msg: '未知消息格式' });
     }
     if (content) {
       try {
-        const gameData = parseGameMessage(内容, 发送者);
-        console.日志('解析的游戏数据:', 游戏数据);
-        const sheetResult = await writeToNewSheet(游戏数据);
-        console.日志('新表格写入结果:', sheetResult);
-      } catch (解析错误) {
-        控制台错误('解析游戏数据失败:'parseError消息)
-        const errorPayload = {
-          add_records: [{
-            values: {
-              "fPaTu6": sender,
-              "fYjV7x": “解析失败”,
-              "fssaCv": parseError.message
-            }
-          }]
-        };
-        try {
-          await axios.帖子(SHEET_WEBHOOK_URL, errorPayload, {
-            headers: { 'Content-Type': 'application/json' },
-            timeout: 5000
-          });
-        } catch (sheetError) {
-          console.错误('错误信息写入表格失败:', sheetError.消息);
-        }
+        const gameData = parseGameMessage(content, sender);
+        console.log('解析的游戏数据:', gameData);
+        const sheetResult = await writeToNewSheet(gameData);
+        console.log('新表格写入结果:', sheetResult);
+      } catch (parseError) {
+        console.error('解析游戏数据失败:', parseError.message);
+        await writeToNewSheet({
+          roleName: '解析失败', level: 0, expStart: 0, expEnd: 0,
+          wechatName: sender, originalMessage: content, error: parseError.message
+        });
       }
     }
-    res.JSON({ code: 0, msg: '消息已处理' });
+    res.json({ code: 0, msg: '消息已处理' });
   } catch (error) {
-    console.错误('处理消息失败:', 错误);
-    res.JSON({ code: -1, msg: '处理失败', error: error.message });
+    console.error('处理消息失败:', error);
+    res.json({ code: -1, msg: '处理失败', error: error.message });
   }
 });
 
-app.get('/', (请求, res) => {
-       res.JSON({
-       服务: '游戏数据记录系统',
-       状态: '运行中',
-       时间戳: new 日期().toISOString(),
-       配置: { 回调_url: '/callback', 表格已配置: !!表格Webhook_URL }
-     });
-   });
+app.get('/', (req, res) => {
+  res.json({
+    service: '游戏数据记录系统',
+    status: '运行中',
+    timestamp: new Date().toISOString(),
+    config: { callback_url: '/callback', sheet_configured: !!SHEET_WEBHOOK_URL }
+  });
+});
 
-   app.帖子('/test', async (请求, res) => {
-     const { message = '@财务账号张三 等级50 开始1000 结束2000', sender = '测试用户', testType = 'normal' } = req.body;
-     try {
-       let testMessage = message;
-       if (testType === '升级') testMessage = '@财务账号mao 等级180 开始10000 结束升级10000';
-       const gameData = parseGameMessage(测试消息, 发送者);
-       const result = await writeToNewSheet(游戏数据);
-       res.json({ success: true, message: '测试成功', data: { parsed: gameData, sheet_result: result } });
-     } catch (错误) {
-       res.状态(500).JSON({ success: false, error: error.message });
-     }
-   });
+app.post('/test', async (req, res) => {
+  const { message = '@财务账号张三 等级50 开始1000 结束2000', sender = '测试用户', testType = 'normal' } = req.body;
+  try {
+    let testMessage = message;
+    if (testType === 'upgrade') testMessage = '@财务账号mao 等级180 开始10000 结束升级10000';
+    const gameData = parseGameMessage(testMessage, sender);
+    const result = await writeToNewSheet(gameData);
+    res.json({ success: true, message: '测试成功', data: { parsed: gameData, sheet_result: result } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
-   app.get('健康', (请求, res) => {
-     响应.JSON(
-       status: 'ok',
-       时间戳新 日期).toISOString(),
-       工作日: ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][new 日期().getDay()],
-       日期: new 日期().getDate()
-     });
-   });
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    weekday: ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][new Date().getDay()],
+    date: new Date().getDate()
+  });
+});
 
-   const PORT = process.env.PORT || 10000;
-   应用.监听(端口, () => {
-     控制台.日志(` 游戏数据记录系统启动，端口:${端口}`);
-     console.日志(` 回调地址: /callback`);
-     控制台.日志(` 新表格Webhook:${SHEET_WEBHOOK_URL ? '已配置' : '未配置'}`);
-     控制台.日志(` 支持格式: @财务账号[角色] 级别[数字] 开始经验[数字] 结束经验[数字或升级+数字]`);
-     控制台.日志(` 经验表: 1-200级完整数据`);
-     console.日志(`🧮 差值计算: 升级情况 = (升级所需经验 ÷ 10000) - 开始经验 + 结束经验`);
-     控制台日志(`升级格式处理: 表格字段fe513b发送数字0`)
-   });
- ```
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => {
+  console.log(`🚀 游戏数据记录系统启动，端口: ${PORT}`);
+  console.log(`🔗 回调地址: /callback`);
+  console.log(`📊 新表格Webhook: ${SHEET_WEBHOOK_URL ? '已配置' : '未配置'}`);
+  console.log(`🎮 支持格式: @财务账号[角色] 等级[数字] 开始[数字] 结束[数字或升级+数字]`);
+  console.log(`📈 经验表: 1-200级完整数据`);
+  console.log(`🧮 差值计算: 升级情况 = (升级所需经验 ÷ 10000) - 开始经验 + 结束经验`);
+});
