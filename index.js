@@ -62,20 +62,58 @@ function getUpgradeExperience(level) {
 function parseGameMessage(message, sender) {
   let cleanMessage = message.replace(/@财务账号/g, '').replace(/@财务/g, '').trim();
   console.log('清理后消息:', cleanMessage);
+  
   const accountMatch = cleanMessage.match(/账号\s*(\S+)/);
   const levelMatch = cleanMessage.match(/等级\s*(\d+)/);
   
-  // 支持三种字段名：开始/经验开始/开始经验
-  let expStartMatch = cleanMessage.match(/开始\s*(\d+)/);
-  if (!expStartMatch) expStartMatch = cleanMessage.match(/经验开始\s*(\d+)/);
-  if (!expStartMatch) expStartMatch = cleanMessage.match(/开始经验\s*(\d+)/);
+  console.log('账号匹配:', accountMatch);
+  console.log('等级匹配:', levelMatch);
   
-  // 支持三种字段名：结束/经验结束/结束经验
-  let expEndMatch = cleanMessage.match(/结束\s*(\S+)/);
-  if (!expEndMatch) expEndMatch = cleanMessage.match(/经验结束\s*(\S+)/);
-  if (!expEndMatch) expEndMatch = cleanMessage.match(/结束经验\s*(\S+)/);
+  // 调试：查看所有可能的匹配
+  const startPatterns = [/开始\s*(\d+)/, /经验开始\s*(\d+)/, /开始经验\s*(\d+)/];
+  const endPatterns = [/结束\s*(\d+)/, /经验结束\s*(\d+)/, /结束经验\s*(\d+)/];
+  
+  let expStartMatch = null;
+  let expEndMatch = null;
+  
+  for (const pattern of startPatterns) {
+    const match = cleanMessage.match(pattern);
+    if (match) {
+      expStartMatch = match;
+      console.log('开始经验匹配:', pattern, '->', match);
+      break;
+    }
+  }
+  
+  for (const pattern of endPatterns) {
+    const match = cleanMessage.match(pattern);
+    if (match) {
+      expEndMatch = match;
+      console.log('结束经验匹配:', pattern, '->', match);
+      break;
+    }
+  }
+  
+  // 如果没匹配到数字，尝试匹配升级格式
+  if (!expEndMatch) {
+    const upgradePatterns = [/结束\s*(升级\+?\d+)/, /经验结束\s*(升级\+?\d+)/, /结束经验\s*(升级\+?\d+)/];
+    for (const pattern of upgradePatterns) {
+      const match = cleanMessage.match(pattern);
+      if (match) {
+        expEndMatch = match;
+        console.log('升级格式匹配:', pattern, '->', match);
+        break;
+      }
+    }
+  }
   
   if (!accountMatch || !levelMatch || !expStartMatch || !expEndMatch) {
+    console.log('匹配失败详情:', {
+      account: !!accountMatch,
+      level: !!levelMatch,
+      start: !!expStartMatch,
+      end: !!expEndMatch
+    });
     throw new Error('消息格式不正确，需要包含：账号[角色名] 等级[数字] 开始经验[数字] 结束经验[数字或升级+数字]');
   }
   
@@ -83,6 +121,8 @@ function parseGameMessage(message, sender) {
   const level = parseInt(levelMatch[1], 10);
   const expStart = parseInt(expStartMatch[1], 10);
   const expEndStr = expEndMatch[1];
+  
+  console.log('解析结果:', { roleName, level, expStart, expEndStr });
   
   let expEnd, diff;
   const upgradeMatch = expEndStr.match(/升级\+?(\d+)/);
@@ -96,8 +136,16 @@ function parseGameMessage(message, sender) {
     console.log(`升级计算: 等级${level}升级需${upgradeExpNeeded}, 开始${expStart}, 结束${extraExp}, 差值=${diff}`);
   } else {
     expEnd = parseInt(expEndStr, 10);
-    if (isNaN(expEnd)) throw new Error('经验结束值必须是数字或"升级+数字"格式');
-    if (expEnd <= expStart) throw new Error('经验结束值必须大于经验开始值');
+    console.log('尝试解析结束经验为数字:', expEndStr, '->', expEnd);
+    
+    if (isNaN(expEnd)) {
+      throw new Error('经验结束值必须是数字或"升级+数字"格式，实际值: ' + expEndStr);
+    }
+    
+    if (expEnd <= expStart) {
+      throw new Error('经验结束值必须大于经验开始值');
+    }
+    
     diff = expEnd - expStart;
   }
   
@@ -237,7 +285,7 @@ app.get('/', (req, res) => {
 app.post('/test', async (req, res) => {
   const { message = '@财务账号张三 等级50 开始1000 结束2000', sender = '测试用户', testType = 'normal' } = req.body;
   try {
-    let testMessage = message;
+        let testMessage = message;
     if (testType === 'upgrade') testMessage = '@财务账号mao 等级180 开始10000 结束升级10000';
     const gameData = parseGameMessage(testMessage, sender);
     const result = await writeToNewSheet(gameData);
@@ -261,7 +309,7 @@ app.listen(PORT, () => {
   console.log(`🚀 游戏数据记录系统启动，端口: ${PORT}`);
   console.log(`🔗 回调地址: /callback`);
   console.log(`📊 新表格Webhook: ${SHEET_WEBHOOK_URL ? '已配置' : '未配置'}`);
-  console.log(`🎮 支持格式: @财务账号[角色] 等级[数字] 开始[数字] 结束[数字或升级+数字]`);
+  console.log(`🎮 支持格式: @财务账号[角色] 等级[数字] 开始经验[数字] 结束经验[数字或升级+数字]`);
   console.log(`📈 经验表: 1-200级完整数据`);
   console.log(`🧮 差值计算: 升级情况 = (升级所需经验 ÷ 10000) - 开始经验 + 结束经验`);
 });
