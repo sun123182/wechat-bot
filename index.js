@@ -106,8 +106,12 @@ function parseGameMessage(message, sender) {
   // 使用正则表达式直接提取所有信息
   const accountMatch = cleanMessage.match(/账号\s*(\S+)/);
   const levelMatch = cleanMessage.match(/等级\s*(\d+)/);
+  
+  // 改进的开始经验匹配：匹配 "开始10000" 或 "开始经验22394" 或 "经验开始22394"
   const expStartMatch = cleanMessage.match(/(?:开始|经验开始|开始经验)\s*(\d+)/);
-  const expEndMatch = cleanMessage.match(/(?:结束|经验结束|结束经验)\s*(\S+)/);
+  
+  // 改进的结束经验匹配：匹配数字或"升级+数字"
+  const expEndMatch = cleanMessage.match(/(?:结束|经验结束|结束经验)\s*(\d+|升级\+?\d+)/);
   
   console.log('账号匹配:', accountMatch);
   console.log('等级匹配:', levelMatch);
