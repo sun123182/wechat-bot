@@ -42,17 +42,54 @@ function getSignature(token, timestamp, nonce, encryptedMsg) {
 }
 
 function decryptMsg(encrypted, encodingAESKey) {
-  if (!encodingAESKey || encodingAESKey.length !== 43) throw new Error('EncodingAESKey必须是43位');
-  const key = Buffer.from(encodingAESKey + '=', 'base64');
-  if (key.length !== 32) throw new Error('解码后的Key长度必须是32字节');
-  const iv = key.slice(0, 16);
-  const encryptedBuffer = Buffer.from(encrypted, 'base64');
-  const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
-  let decrypted = decipher.update(encryptedBuffer);
-  decrypted = Buffer.concat([decrypted, decipher.final()]);
-  decrypted = decrypted.slice(16);
-  const msgLength = decrypted.readUInt32BE(0);
-  return decrypted.slice(4, 4 + msgLength).toString('utf8');
+  console.log('开始解密，EncodingAESKey长度:', encodingAESKey?.length);
+  
+  if (!encodingAESKey || encodingAESKey.length !== 43) {
+    throw new Error(`EncodingAESKey必须是43位，实际长度: ${encodingAESKey?.length}`);
+  }
+  
+  try {
+    const key = Buffer.from(encodingAESKey + '=', 'base64');
+    console.log('解码后Key长度:', key.length, '期望: 32');
+    
+    if (key.length !== 32) {
+      throw new Error(`解码后的Key长度必须是32字节，实际: ${key.length}`);
+    }
+    
+    const iv = key.slice(0, 16);
+    const encryptedBuffer = Buffer.from(encrypted, 'base64');
+    console.log('加密Buffer长度:', encryptedBuffer.length);
+    
+    const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+    decipher.setAutoPadding(false);
+    
+    let decrypted = decipher.update(encryptedBuffer);
+    decrypted = Buffer.concat([decrypted, decipher.final()]);
+    
+    console.log('解密后Buffer长度:', decrypted.length);
+    
+    if (decrypted.length < 20) {
+      throw new Error('解密后数据太短');
+    }
+    
+    const msgLength = decrypted.readUInt32BE(16);
+    console.log('消息长度:', msgLength);
+    
+    if (msgLength < 0 || msgLength > decrypted.length - 20) {
+      throw new Error(`消息长度无效: ${msgLength}`);
+    }
+    
+    const content = decrypted.slice(20, 20 + msgLength);
+    const msgContent = content.toString('utf8');
+    
+    console.log('提取的消息内容:', msgContent);
+    
+    return msgContent;
+    
+  } catch (error) {
+    console.error('解密过程错误:', error.message);
+    throw error;
+  }
 }
 
 function getUpgradeExperience(level) {
@@ -62,21 +99,69 @@ function getUpgradeExperience(level) {
 function parseGameMessage(message, sender) {
   let cleanMessage = message.replace(/@财务账号/g, '').replace(/@财务/g, '').trim();
   console.log('清理后消息:', cleanMessage);
+  
   const accountMatch = cleanMessage.match(/账号\s*(\S+)/);
   const levelMatch = cleanMessage.match(/等级\s*(\d+)/);
-  let expStartMatch = cleanMessage.match(/经验开始\s*(\d+)/);
-  if (!expStartMatch) expStartMatch = cleanMessage.match(/开始\s*(\d+)/);
-  let expEndMatch = cleanMessage.match(/经验结束\s*(\S+)/);
-  if (!expEndMatch) expEndMatch = cleanMessage.match(/结束\s*(\S+)/);
-  if (!accountMatch || !levelMatch || !expStartMatch || !expEndMatch) {
-    throw new Error('消息格式不正确，需要包含：账号[角色名] 等级[数字] 开始[数字] 结束[数字或升级+数字]');
+  
+  console.log('账号匹配:', accountMatch);
+  console.log('等级匹配:', levelMatch);
+  
+  const startPatterns = [/开始\s*(\d+)/, /经验开始\s*(\d+)/, /开始经验\s*(\d+)/];
+  const endPatterns = [/结束\s*(\d+)/, /经验结束\s*(\d+)/, /结束经验\s*(\d+)/];
+  
+  let expStartMatch = null;
+  let expEndMatch = null;
+  
+  for (const pattern of startPatterns) {
+    const match = cleanMessage.match(pattern);
+    if (match) {
+      expStartMatch = match;
+      console.log('开始经验匹配:', pattern, '->', match);
+      break;
+    }
   }
+  
+  for (const pattern of endPatterns) {
+    const match = cleanMessage.match(pattern);
+    if (match) {
+      expEndMatch = match;
+      console.log('结束经验匹配:', pattern, '->', match);
+      break;
+    }
+  }
+  
+  if (!expEndMatch) {
+    const upgradePatterns = [/结束\s*(升级\+?\d+)/, /经验结束\s*(升级\+?\d+)/, /结束经验\s*(升级\+?\d+)/];
+    for (const pattern of upgradePatterns) {
+      const match = cleanMessage.match(pattern);
+      if (match) {
+        expEndMatch = match;
+        console.log('升级格式匹配:', pattern, '->', match);
+        break;
+      }
+    }
+  }
+  
+  if (!accountMatch || !levelMatch || !expStartMatch || !expEndMatch) {
+    console.log('匹配失败详情:', {
+      account: !!accountMatch,
+      level: !!levelMatch,
+      start: !!expStartMatch,
+      end: !!expEndMatch
+    });
+    throw new Error('消息格式不正确，需要包含：账号[角色名] 等级[数字] 开始经验[数字] 结束经验[数字或升级+数字]');
+  }
+  
   const roleName = accountMatch[1];
   const level = parseInt(levelMatch[1], 10);
   const expStart = parseInt(expStartMatch[1], 10);
   const expEndStr = expEndMatch[1];
+  
+  console.log('解析结果:', { roleName, level, expStart, expEndStr });
+  
   let expEnd, diff;
   const upgradeMatch = expEndStr.match(/升级\+?(\d+)/);
+  
   if (upgradeMatch) {
     const extraExp = parseInt(upgradeMatch[1], 10);
     const upgradeExpNeeded = getUpgradeExperience(level);
@@ -86,10 +171,19 @@ function parseGameMessage(message, sender) {
     console.log(`升级计算: 等级${level}升级需${upgradeExpNeeded}, 开始${expStart}, 结束${extraExp}, 差值=${diff}`);
   } else {
     expEnd = parseInt(expEndStr, 10);
-    if (isNaN(expEnd)) throw new Error('经验结束值必须是数字或"升级+数字"格式');
-    if (expEnd <= expStart) throw new Error('经验结束值必须大于经验开始值');
+    console.log('尝试解析结束经验为数字:', expEndStr, '->', expEnd);
+    
+    if (isNaN(expEnd)) {
+      throw new Error('经验结束值必须是数字或"升级+数字"格式，实际值: ' + expEndStr);
+    }
+    
+    if (expEnd <= expStart) {
+      throw new Error('经验结束值必须大于经验开始值');
+    }
+    
     diff = expEnd - expStart;
   }
+  
   let salary;
   if (roleName === 'mao' || roleName === '米露') {
     salary = (diff / 1440) * 10;
@@ -99,10 +193,12 @@ function parseGameMessage(message, sender) {
     salary = (diff / 1200) * 10;
   }
   salary = Math.round(salary * 100) / 100;
+  
   const now = new Date();
   const dateNum = parseInt(now.toISOString().slice(8, 10));
   const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
   const weekday = weekdays[now.getDay()];
+  
   return {
     date: dateNum, weekday: weekday, wechatName: sender, roleName: roleName,
     level: level, expStart: expStart, expEnd: expEnd.toString(), diff: diff,
@@ -112,6 +208,7 @@ function parseGameMessage(message, sender) {
 
 async function writeToNewSheet(gameData) {
   if (!SHEET_WEBHOOK_URL) throw new Error('未配置SHEET_WEBHOOK_URL');
+  
   const payload = {
     add_records: [{
       values: {
@@ -121,7 +218,7 @@ async function writeToNewSheet(gameData) {
         "fYjV7x": gameData.roleName,
         "fZ3sSb": gameData.level,
         "fayciJ": gameData.expStart,
-        "fe513b": gameData.expEnd.toString(),
+        "fe513b": gameData.expEnd.includes('升级') ? 0 : gameData.expEnd,
         "fj4ODK": gameData.diff,
         "fjpgjh": gameData.salary,
         "fssaCv": gameData.note || '',
@@ -129,29 +226,54 @@ async function writeToNewSheet(gameData) {
       }
     }]
   };
+  
   console.log('发送到新表格:', JSON.stringify(payload, null, 2));
-  const response = await axios.post(SHEET_WEBHOOK_URL, payload, {
-    headers: { 'Content-Type': 'application/json' },
-    timeout: 10000
-  });
-  return response.data;
+  
+  try {
+    const response = await axios.post(SHEET_WEBHOOK_URL, payload, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 10000
+    });
+    console.log('表格写入成功:', response.data);
+    return response.data;
+  } catch (error) {
+    console.error('表格写入失败:', error.response?.data || error.message);
+    throw error;
+  }
 }
 
 app.get('/callback', (req, res) => {
   const { msg_signature, timestamp, nonce, echostr } = req.query;
-  console.log('企业微信验证请求:', { msg_signature: msg_signature?.substring(0, 20) + '...', timestamp, nonce });
-  if (!msg_signature || !timestamp || !nonce || !echostr) return res.status(400).send('缺少必要参数');
+  console.log('企业微信验证请求:', { 
+    msg_signature: msg_signature?.substring(0, 10) + '...', 
+    timestamp, 
+    nonce,
+    echostr: echostr?.substring(0, 20) + '...'
+  });
+  
+  if (!msg_signature || !timestamp || !nonce || !echostr) {
+    return res.status(400).send('缺少必要参数');
+  }
+  
   try {
     const signature = getSignature(WECOM_TOKEN, timestamp, nonce, echostr);
+    console.log('计算签名:', signature.substring(0, 10) + '...');
+    
     if (signature !== msg_signature) {
-      console.error('签名验证失败', { expected: signature, actual: msg_signature });
+      console.error('签名验证失败');
+      console.error('期望:', signature);
+      console.error('实际:', msg_signature);
       return res.status(403).send('签名验证失败');
     }
+    
     console.log('✅ 签名验证成功');
+    
     const decryptedMsg = decryptMsg(echostr, WECOM_ENCODING_AES_KEY);
-    console.log('✅ 解密成功:', decryptedMsg);
+    console.log('✅ 解密成功，返回明文:', decryptedMsg);
+    
     res.set('Content-Type', 'text/plain; charset=utf-8');
     res.send(decryptedMsg);
+    
   } catch (error) {
     console.error('验证失败:', error.message);
     res.status(500).send('验证失败: ' + error.message);
@@ -189,7 +311,8 @@ app.post('/callback', async (req, res) => {
       console.log('原始消息:', { sender, content });
     } else {
       console.error('未知消息格式:', message);
-      return res.json({ code: -1, msg: '未知消息格式' });
+      return res.json({ code: -1,
+                             msg: '未知消息格式' });
     }
     if (content) {
       try {
@@ -199,10 +322,23 @@ app.post('/callback', async (req, res) => {
         console.log('新表格写入结果:', sheetResult);
       } catch (parseError) {
         console.error('解析游戏数据失败:', parseError.message);
-        await writeToNewSheet({
-          roleName: '解析失败', level: 0, expStart: 0, expEnd: 0,
-          wechatName: sender, originalMessage: content, error: parseError.message
-        });
+        const errorPayload = {
+          add_records: [{
+            values: {
+              "fPaTu6": sender,
+              "fYjV7x": "解析失败",
+              "fssaCv": parseError.message
+            }
+          }]
+        };
+        try {
+          await axios.post(SHEET_WEBHOOK_URL, errorPayload, {
+            headers: { 'Content-Type': 'application/json' },
+            timeout: 5000
+          });
+        } catch (sheetError) {
+          console.error('错误信息写入表格失败:', sheetError.message);
+        }
       }
     }
     res.json({ code: 0, msg: '消息已处理' });
@@ -248,7 +384,8 @@ app.listen(PORT, () => {
   console.log(`🚀 游戏数据记录系统启动，端口: ${PORT}`);
   console.log(`🔗 回调地址: /callback`);
   console.log(`📊 新表格Webhook: ${SHEET_WEBHOOK_URL ? '已配置' : '未配置'}`);
-  console.log(`🎮 支持格式: @财务账号[角色] 等级[数字] 开始[数字] 结束[数字或升级+数字]`);
+  console.log(`🎮 支持格式: @财务账号[角色] 等级[数字] 开始经验[数字] 结束经验[数字或升级+数字]`);
   console.log(`📈 经验表: 1-200级完整数据`);
   console.log(`🧮 差值计算: 升级情况 = (升级所需经验 ÷ 10000) - 开始经验 + 结束经验`);
+  console.log(`🔄 升级格式处理: 表格字段fe513b发送数字0`);
 });
